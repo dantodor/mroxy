@@ -93,7 +93,7 @@ defmodule Mroxy.ProxyServer do
     end
 
     # Establish the downstream TCP connection
-    {:ok, down_socket} = :gen_tcp.connect(downstream_host, downstream_port, @downstream_tcp_opts)
+    {:ok, down_socket} = :gen_tcp.connect(to_charlist(downstream_host), downstream_port, @downstream_tcp_opts)
     Logger.debug("Downstream connection established")
     # Add downstream connection information and socket to `ProxyServer` state
     state = %{
@@ -106,7 +106,7 @@ defmodule Mroxy.ProxyServer do
     # Establish the downstream logger TCP connection
     # This must be handled differently from the normal downstream
     # If connection fails, we still continue to work, even if logger not available
-    state = case :gen_tcp.connect(downstream_logger_host, downstream_logger_port, @logger_tcp_opts) do
+    state = case :gen_tcp.connect(to_charlist(downstream_logger_host), downstream_logger_port, @logger_tcp_opts) do
       {:ok, down_logger_socket} ->
         %{
           state |

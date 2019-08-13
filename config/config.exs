@@ -16,12 +16,12 @@ config :logger,
 
 config :mroxy, Mroxy.ProxyListener,
   host: envar.("MROXY_PROXY_HOST") || "localhost",
-  port: envar.("MROXY_PROXY_PORT") || "1334"
+  port: envar.("MROXY_PROXY_PORT") || 1334
 
 config :mroxy, Mroxy.ProxyServer,
   packet_trace: false,
   downstream_host: envar.("DOWNSTREAM_HOST") || "localhost",
-  downstream_port: envar.("DOWNSTREAM_PORT") || "1443",
+  downstream_port: envar.("DOWNSTREAM_PORT") || 1443,
   downstream_logger_host: envar.("DOWNSTREAM_LOGGER_HOST") || "localhost",
-  downstream_logger_port: envar.("DOWNSTREAM_LOGGER_PORT") || "5000"
+  downstream_logger_port: envar.("DOWNSTREAM_LOGGER_PORT") || 5000
 

@@ -94,6 +94,7 @@ defmodule Mroxy.ProxyListener do
 
         # set the spawned proxy as the controlling process for the socket
         :gen_tcp.controlling_process(upstream_socket, proxy)
+        accept(proxy_opts)
         {:noreply, state}
 
       {:error, :closed} ->
