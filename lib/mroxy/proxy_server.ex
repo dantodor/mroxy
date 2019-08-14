@@ -37,8 +37,6 @@ defmodule Mroxy.ProxyServer do
 
   Keyword `args`:
   * `:upstream_socket` - `:gen_tcp` connection delegated from the `Mroxy.ProxyListener`
-  * `:downstream_host` - [optional] downstream host
-  * `:downstream_port` - [optional] downstream port
   """
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)
@@ -93,35 +91,39 @@ defmodule Mroxy.ProxyServer do
     end
 
     # Establish the downstream TCP connection
-    {:ok, down_socket} = :gen_tcp.connect(to_charlist(downstream_host), downstream_port, @downstream_tcp_opts)
-    Logger.debug("Downstream connection established")
     # Add downstream connection information and socket to `ProxyServer` state
-    state = %{
-      state |
-        downstream: %{
-        downstream | socket: down_socket
-      }
-    }
-
-    # Establish the downstream logger TCP connection
-    # This must be handled differently from the normal downstream
-    # If connection fails, we still continue to work, even if logger not available
-    state = case :gen_tcp.connect(to_charlist(downstream_logger_host), downstream_logger_port, @logger_tcp_opts) do
-      {:ok, down_logger_socket} ->
-        %{
+    # stop if we can't connect to main backend, continue working without logging backend
+    case :gen_tcp.connect(to_charlist(downstream_host), downstream_port, @downstream_tcp_opts) do
+      {:ok, down_socket} ->
+        state = %{
           state |
-            downstream_logger: %{
-            downstream_logger | socket: down_logger_socket
+          downstream: %{
+            downstream | socket: down_socket
           }
         }
-      _ -> state
+        Logger.debug("Downstream connection established")
+        # Establish the downstream logger TCP connection
+        # This must be handled differently from the normal downstream
+        # If connection fails, we still continue to work, even if logger not available
+        state = case :gen_tcp.connect(to_charlist(downstream_logger_host), downstream_logger_port, @logger_tcp_opts) do
+          {:ok, down_logger_socket} ->
+            %{
+              state |
+              downstream_logger: %{
+                downstream_logger | socket: down_logger_socket
+              }
+            }
+          _ -> state
+        end
+
+        Logger.debug("Downstream logger connection established")
+        send(self(), msg)
+
+        {:noreply, state}
+
+      _ -> {:stop, :normal, state} # stop when we can't establish connection to main backend
     end
 
-    Logger.debug("Downstream logger connection established")
-
-    # Reschedule this TCP message now that downstream connection is available
-    send(self(), msg)
-    {:noreply, state}
   end
 
    def handle_info(
