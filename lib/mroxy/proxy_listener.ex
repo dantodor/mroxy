@@ -57,7 +57,6 @@ defmodule Mroxy.ProxyListener do
         p when is_binary(p) -> String.to_integer(p)
         p when is_integer(p) -> p
       end
-
     send(self(), {:listen, port})
     {:ok, %{listen_socket: nil}}
   end
@@ -68,7 +67,6 @@ defmodule Mroxy.ProxyListener do
       {:ok, socket} ->
         Logger.debug("Listening on port: #{port}")
         {:noreply, %{listen_socket: socket}}
-
       {:error, reason} ->
         Logger.error("TCP Listen failed due to: #{inspect(reason)}")
         {:stop, :normal, state}
@@ -85,31 +83,25 @@ defmodule Mroxy.ProxyListener do
     case :gen_tcp.accept(socket) do
       {:ok, upstream_socket} ->
         Logger.info("Connection accepted, spawning proxy server to manage connection")
-
         {:ok, proxy} =
           Mroxy.ProxyServer.start_link(
             upstream_socket: upstream_socket,
             proxy_opts: proxy_opts
           )
-
         # set the spawned proxy as the controlling process for the socket
         :gen_tcp.controlling_process(upstream_socket, proxy)
         accept(proxy_opts)
         {:noreply, state}
-
       {:error, :closed} ->
         Logger.warn("Upstream listener socket closed")
         {:stop, :normal, state}
-
       {:error, :timeout} ->
         Logger.error("Upstream listener timed out waiting to accept")
         {:stop, :normal, state}
-
       {:error, :system_limit} ->
         Logger.error(
           "Upstream listen hit system limit all available ports in the Erlang emulator are in use"
         )
-
         {:stop, :normal, state}
     end
   end

@@ -45,35 +45,29 @@ defmodule Mroxy.ProxyServer do
   @doc false
   def init(args) do
     upstream_socket = Keyword.get(args, :upstream_socket)
-    opts = Keyword.get(args, :proxy_opts)
     popts = Application.get_env(:mroxy, Mroxy.ProxyServer, [])
-    # check args for packet_trace, otherwise check config
-    packet_trace =
-      Keyword.get(opts, :packet_trace, false) ||
-        popts
-        |> Keyword.get(:packet_trace, false)
-
-
-
+    # check config for packet_trace
+    packet_trace = popts |> Keyword.get(:packet_trace, false)
+    # compose initial state
     {:ok,
-     %{
-       upstream: %{
-         socket: upstream_socket
-       },
-       downstream: %{
-         downstream_host: Keyword.get(popts, :downstream_host),
-         downstream_port: Keyword.get(popts, :downstream_port),
-         tcp_opts: @downstream_tcp_opts,
-         socket: nil
-       },
-       downstream_logger: %{
-        downstream_logger_host: Keyword.get(popts, :downstream_logger_host),
-        downstream_logger_port: Keyword.get(popts, :downstream_logger_port),
-        tcp_opts: @logger_tcp_opts,
-        socket: nil
-      },
-       packet_trace: packet_trace
-     }}
+      %{
+        upstream: %{
+          socket: upstream_socket
+        },
+        downstream: %{
+          ds_host: Keyword.get(popts, :ds_host),
+          ds_port: String.to_integer(Keyword.get(popts, :ds_port)),
+          tcp_opts: @downstream_tcp_opts,
+          socket: nil
+        },
+        logger: %{
+          logger_host: Keyword.get(popts, :logger_host),
+          logger_port: String.to_integer(Keyword.get(popts, :logger_port)),
+          tcp_opts: @logger_tcp_opts,
+          socket: nil
+        },
+        packet_trace: packet_trace
+      }}
   end
 
   @doc false
@@ -81,122 +75,124 @@ defmodule Mroxy.ProxyServer do
         msg = {:tcp, upstream_socket, data},
         state = %{
           upstream: %{socket: upstream_socket},
-          downstream: downstream = %{downstream_host: downstream_host, downstream_port: downstream_port, socket: nil},
-          downstream_logger: downstream_logger = %{downstream_logger_host: downstream_logger_host,
-            downstream_logger_port: downstream_logger_port, socket: nil}
+          downstream: downstream = %{ds_host: ds_host, ds_port: ds_port, socket: nil},
+          logger: logger = %{logger_host: logger_host, logger_port: logger_port, socket: nil}
         })
-  do
+    do
     if state.packet_trace do
       Logger.debug("Up -> PROXY [rescheduled]: #{inspect(data)}")
     end
-
     # Establish the downstream TCP connection
-    # Add downstream connection information and socket to `ProxyServer` state
-    # stop if we can't connect to main backend, continue working without logging backend
-    case :gen_tcp.connect(to_charlist(downstream_host), downstream_port, @downstream_tcp_opts) do
-      {:ok, down_socket} ->
-        state = %{
-          state |
-          downstream: %{
-            downstream | socket: down_socket
-          }
-        }
-        Logger.debug("Downstream connection established")
-        # Establish the downstream logger TCP connection
-        # This must be handled differently from the normal downstream
-        # If connection fails, we still continue to work, even if logger not available
-        state = case :gen_tcp.connect(to_charlist(downstream_logger_host), downstream_logger_port, @logger_tcp_opts) do
-          {:ok, down_logger_socket} ->
-            %{
-              state |
-              downstream_logger: %{
-                downstream_logger | socket: down_logger_socket
-              }
-            }
-          _ -> state
-        end
-
-        Logger.debug("Downstream logger connection established")
-        send(self(), msg)
-
-        {:noreply, state}
-
-      _ -> {:stop, :normal, state} # stop when we can't establish connection to main backend
+    case :gen_tcp.connect(to_charlist(ds_host), ds_port, @downstream_tcp_opts) do
+      {:ok, down_socket} -> Logger.debug("Downstream connection established")
+                            # Add downstream connection information and socket to `ProxyServer` state
+                            state = %{
+                              state |
+                              downstream: %{
+                                downstream | socket: down_socket
+                              }
+                            }
+                            state = case :gen_tcp.connect(to_charlist(logger_host), logger_port, @logger_tcp_opts) do
+                              {:ok, logger_socket} ->
+                                  Logger.debug("Logger connection established")
+                                  # send the upstream ip for this connection to logger
+                                  {:ok, {ip, _port}} = :inet.peername(logger_socket)
+                                  :gen_tcp.send(logger_socket, ":::"<>to_string(:inet_parse.ntoa(ip)))
+                                  %{
+                                    state |
+                                    logger: %{
+                                      logger | socket: logger_socket
+                                    }
+                                  }
+                              _ -> Logger.debug("Logger connection failed")
+                                     state
+                            end
+                            send(self(), msg)
+                            {:noreply, state}
+      {:error, reason} -> Logger.error("Cannot connect downstream because #{reason}")
+                          {:stop, :normal, state}
     end
-
   end
 
-   def handle_info(
+  def handle_info(
         {:tcp, upstream_socket, data},
         state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-          downstream_logger: %{socket: nil}, }
+          logger: %{socket: nil} }
       ) do
     if state.packet_trace do
       Logger.debug("Up -> Down: #{inspect(data)}")
     end
-
     :gen_tcp.send(downstream_socket, data)
     {:noreply, state}
   end
 
   def handle_info(
-    {:tcp, upstream_socket, data},
-    state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-      downstream_logger: %{socket: downstream_logger_socket} }
-  ) do
+        {:tcp, upstream_socket, data},
+        state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
+          logger: %{socket: logger_socket} }
+      ) do
     if state.packet_trace do
       Logger.debug("Up -> Down: #{inspect(data)}")
     end
-
     :gen_tcp.send(downstream_socket, data)
-    :gen_tcp.send(downstream_logger_socket, data)
+    :gen_tcp.send(logger_socket, ">>>"<>get_tstamp()<>"<<<"<>data)
     {:noreply, state}
   end
 
   def handle_info(
         {:tcp, downstream_socket, data},
-        state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket}}
+        state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
+          logger: %{socket: nil} }
       ) do
     if state.packet_trace do
       Logger.debug("Up <- Down: #{inspect(data)}")
     end
-
     :gen_tcp.send(upstream_socket, data)
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:tcp, downstream_socket, data},
+        state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
+          logger: %{socket: logger_socket} }
+      ) do
+    if state.packet_trace do
+      Logger.debug("Up <- Down: #{inspect(data)}")
+    end
+    :gen_tcp.send(upstream_socket, data)
+    :gen_tcp.send(logger_socket,"<<<"<>get_tstamp()) # log the response timestamp
     {:noreply, state}
   end
 
   def handle_info(
         {:tcp_closed, upstream_socket},
         state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-        downstream_logger: %{socket: nil}}
+          logger: %{socket: nil}}
       ) do
     Logger.debug("Upstream socket closed, terminating proxy")
-
     :gen_tcp.close(downstream_socket)
     :gen_tcp.close(upstream_socket)
     {:stop, :normal, state}
   end
 
   def handle_info(
-    {:tcp_closed, upstream_socket},
-    state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-    downstream_logger: %{socket: downstream_logger_socket}}
-  ) do
-      Logger.debug("Upstream socket closed, terminating proxy")
-
-      :gen_tcp.close(downstream_socket)
-      :gen_tcp.close(downstream_logger_socket)
-      :gen_tcp.close(upstream_socket)
-      {:stop, :normal, state}
-    end
+        {:tcp_closed, upstream_socket},
+        state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
+          logger: %{socket: logger_socket}}
+      ) do
+    Logger.debug("Upstream socket closed, terminating proxy")
+    :gen_tcp.close(downstream_socket)
+    :gen_tcp.close(logger_socket)
+    :gen_tcp.close(upstream_socket)
+    {:stop, :normal, state}
+  end
 
   def handle_info(
         {:tcp_closed, downstream_socket},
         state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-        downstream_logger: %{socket: nil}}
+          logger: %{socket: nil}}
       ) do
     Logger.warn("Downstream socket closed, terminating proxy")
-
     :gen_tcp.close(downstream_socket)
     :gen_tcp.close(upstream_socket)
     {:stop, :normal, state}
@@ -205,29 +201,35 @@ defmodule Mroxy.ProxyServer do
   def handle_info(
         {:tcp_closed, downstream_socket},
         state = %{upstream: %{socket: upstream_socket}, downstream: %{socket: downstream_socket},
-        downstream_logger: %{socket: downstream_logger_socket}}
+          logger: %{socket: logger_socket}}
       ) do
     Logger.warn("Downstream socket closed, terminating proxy")
-
     :gen_tcp.close(downstream_socket)
-    :gen_tcp.close(downstream_logger_socket)
+    :gen_tcp.close(logger_socket)
     :gen_tcp.close(upstream_socket)
     {:stop, :normal, state}
   end
 
   def handle_info(
-        {:tcp_closed, downstream_logger_socket},
-        state = %{downstream_logger: downstream_logger = %{socket: downstream_logger_socket}}
+        {:tcp_closed, logger_socket},
+        state = %{logger: logger = %{socket: logger_socket}}
       ) do
     Logger.warn("Downstream logger socket closed, continuing without it")
-
     state = %{
       state |
-        downstream_logger: %{
-          downstream_logger | socket: nil
+      logger: %{
+        logger | socket: nil
       }
     }
     {:noreply, state}
   end
 
+  def handle_info(msg, state) do
+    Logger.warn("Unexpected message: #{inspect(msg)}}")
+    {:noreply, state}
+  end
+
+  defp get_tstamp() do
+    to_string(:os.system_time(:millisecond))<>": "
+  end
 end
