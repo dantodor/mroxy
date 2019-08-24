@@ -16,7 +16,7 @@ defmodule Mroxy.ProxyServer do
 
   @logger_tcp_opts [
     :binary,
-    packet: 0,
+    packet: :raw,
     active: true,
     nodelay: true
   ]
@@ -97,7 +97,8 @@ defmodule Mroxy.ProxyServer do
                                   Logger.debug("Logger connection established")
                                   # send the upstream ip for this connection to logger
                                   {:ok, {ip, _port}} = :inet.peername(logger_socket)
-                                  :gen_tcp.send(logger_socket, ":::"<>to_string(:inet_parse.ntoa(ip)))
+                                  :gen_tcp.send(logger_socket, String.pad_trailing(":::"<>to_string(:inet_parse.ntoa(ip)),100))
+                                  :gen_tcp.send(logger_socket, "\n")
                                   %{
                                     state |
                                     logger: %{
@@ -160,7 +161,8 @@ defmodule Mroxy.ProxyServer do
       Logger.debug("Up <- Down: #{inspect(data)}")
     end
     :gen_tcp.send(upstream_socket, data)
-    :gen_tcp.send(logger_socket,"<<<"<>get_tstamp()) # log the response timestamp
+    :gen_tcp.send(logger_socket,"<<<"<>get_tstamp()<>">>>"<>Integer.to_string(byte_size(data)))
+    # log the response timestamp and size
     {:noreply, state}
   end
 
@@ -230,6 +232,6 @@ defmodule Mroxy.ProxyServer do
   end
 
   defp get_tstamp() do
-    to_string(:os.system_time(:millisecond))<>": "
+    to_string(:os.system_time(:millisecond))
   end
 end
