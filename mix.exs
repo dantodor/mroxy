@@ -10,7 +10,8 @@ defmodule Mroxy.MixProject do
       deps: deps(),
       description: description(),
       package: package(),
-      docs: [main: "Mroxy", extras: ["README.md"]]
+      docs: [main: "Mroxy", extras: ["README.md"]],
+      releases: releases()
     ]
   end
 
@@ -39,6 +40,15 @@ defmodule Mroxy.MixProject do
       maintainers: ["Dan Todor (@dantodor)"],
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/dantodor/mroxy"}
+    ]
+  end
+
+  defp releases() do
+    [
+      demo: [
+        include_executables_for: [:unix],
+        applications: [runtimetools: :permanent],
+      ]
     ]
   end
 end
